@@ -1,0 +1,133 @@
+- name: create ec2 and r53 records
+  hosts: localhost
+  vars:
+    zone: lingaiah.online
+    instances:
+    - db
+    - backend
+    - frontend
+  tasks:
+  - name: create ec2 instances
+    amazon.aws.ec2_instance:
+      instance_type: t2.micro
+      name: "{{ item }}"
+      security_group: allow-everything #replace with you AWS values
+      image_id: ami-09c813fb71547fc4f
+      tags:
+        Name: "{{ item }}"
+    loop: "{{ instances }}"
+    register: ec2_instances_info
+
+  - name: print output
+    ansible.builtin.debug:
+      msg: "Output: {{ ec2_instances_info }}"
+
+  - name: create r53 records
+    amazon.aws.route53:
+      state: present
+      zone: " {{ zone }}"
+      record: " {{ item }}.{{ zone }}"
+      type: A
+      value: "{{ item.instances.private_ip_address }}"
+      overwrite: true
+      ttl: 1
+    loop: "{{ ec2_instances_info.results.instances }}"
+
+  
+ 
+
+#Identify the affected servers. Check the status of service through systemctl commaand print the servers where service is not running.
+- name: Check the status of my_critical_service
+  hosts: all_servers  # Or specify a specific group of servers
+  tasks:
+  - name: Check service status
+    ansible.builtin.shell: "systemctl is-active my_critical_service"
+    register: service_status
+    ignore_errors: true
+
+  - name: Report servers with service down
+    ansible.builtin.debug:
+      msg: "{{ inventory_hostname }} - Service is down"
+    when: service_status.stdout != "active"
+
+#Gather and print the logs why it is down
+- name: Check recent logs
+  ansible.builtin.shell: "journalctl -u my_critical_service --since '10 minutes ago'"
+  register: service_logs
+  when: service_status.stdout != "active"
+
+- name: Print service logs for debugging
+  ansible.builtin.debug:
+    var: service_logs.stdout_lines
+  when: service_status.stdout != "active"
+
+
+#Restart the service on affected servers.
+- name: Restart the service if it is down
+  ansible.builtin.systemd:
+    name: my_critical_service
+    state: restarted
+  when: service_status.stdout != "active"
+
+#Check whether restart is successful or not
+- name: Confirm service is active
+  ansible.builtin.shell: "systemctl is-active my_critical_service"
+  register: final_status
+
+- name: Report any servers where the service is still down
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} - Service failed to start"
+  when: final_status.stdout != "active"
+
+
+  Playbook looks like
+ #restart_critical_service.yml
+- name: Manage critical service across multiple servers
+  hosts: all_servers  # Adjust this to target your specific group of servers
+  become: true        # Ensure you have the necessary privileges to manage services
+  vars:
+    service_name: "my_critical_service"
+  tasks:
+    - name: Check the status of the service
+      ansible.builtin.shell: "systemctl is-active {{ service_name }}"
+      register: service_status
+      ignore_errors: true
+
+    - name: Log servers with the service down
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} - Service {{ service_name }} is down"
+      when: service_status.stdout != "active"
+
+    - name: Retrieve recent service logs for debugging
+      ansible.builtin.shell: "journalctl -u {{ service_name }} --since '10 minutes ago'"
+      register: service_logs
+      when: service_status.stdout != "active"
+      ignore_errors: true
+
+    - name: Display recent logs for debugging
+      ansible.builtin.debug:
+        var: service_logs.stdout_lines
+      when: service_status.stdout != "active"
+
+    - name: Restart the service if it is down
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        state: restarted
+      when: service_status.stdout != "active"
+
+    - name: Verify the service is active
+      ansible.builtin.shell: "systemctl is-active {{ service_name }}"
+      register: final_status
+
+    - name: Report servers where the service failed to start
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} - Service {{ service_name }} failed to start"
+      when: final_status.stdout != "active"
+
+    - name: Confirm that the service is running successfully
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} - Service {{ service_name }} is running successfully"
+
+
+
+        
